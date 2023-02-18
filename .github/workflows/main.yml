@@ -25,4 +25,9 @@ jobs:
         which nim
         which nimble
         nimble path nimble
-        
+    - name: Package
+      run: |
+        tar czvf nim.tar.xz nimdir
+    - name: List
+      run: |
+        tar tf nim.tar.xz
