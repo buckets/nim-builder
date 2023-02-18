@@ -1,0 +1,28 @@
+on:
+  pull_request:
+  push:
+
+jobs:
+  tests:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        version:
+          - 'git:v1.6.10-pluspatches https://github.com/iffy/Nim.git'
+        os:
+          - ubuntu-latest
+          - macOS-latest
+          - windows-latest
+    steps:
+    - uses: actions/checkout@v1
+    - uses: iffy/install-nim@v4
+      with:
+        version: ${{ matrix.version }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - run: |
+        ls -al
+        which nim
+        which nimble
+        nimble path nimble
+        
