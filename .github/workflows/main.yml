@@ -20,14 +20,17 @@ jobs:
         version: ${{ matrix.version }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    - run: |
+    - shell: bash
+      run: |
         ls -al
         which nim
         which nimble
     - name: Package
+      shell: bash
       run: |
         tar czvf nim-1.6.10-pluspatches-${{ matrix.os }}.tar.xz nimdir
     - name: List
+      shell: bash
       run: |
         tar tf nim-1.6.10-pluspatches-${{ matrix.os }}.tar.xz
     - uses: actions/upload-artifact@v3
