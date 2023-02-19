@@ -48,6 +48,8 @@ jobs:
         path: artifacts
     - name: Draft release
       shell: bash
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         ls -alR artifacts
         TAG="v1.6.10-$(date "+%Y%m%d-%H%M%S")"
