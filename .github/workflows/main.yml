@@ -3,7 +3,7 @@ on:
   push:
 
 jobs:
-  tests:
+  build:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -24,10 +24,13 @@ jobs:
         ls -al
         which nim
         which nimble
-        nimble path nimble
     - name: Package
       run: |
-        tar czvf nim.tar.xz nimdir
+        tar czvf nim-1.6.10-pluspatches-${{ matrix.os }}.tar.xz nimdir
     - name: List
       run: |
-        tar tf nim.tar.xz
+        tar tf nim-1.6.10-pluspatches-${{ matrix.os }}.tar.xz
+    - uses: actions/upload-artifact@v3
+      with:
+        name: nim-1.6.10-pluspatches-${{ matrix.os }}.tar.xz
+        path: nim-1.6.10-pluspatches-${{ matrix.os }}.tar.xz
