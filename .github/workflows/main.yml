@@ -28,6 +28,12 @@ jobs:
     - name: Package
       shell: bash
       run: |
+        rm -r nimdir/.git
+        rm -r nimdir/.builds
+        rm -r nimdir/.github
+        rm -r nimdir/csources_v1/.git
+        rm -r nimdir/dist/nimble/.git
+        rm -r nimdir/nimcache
         tar czvf nim-1.6.10-pluspatches-${{ matrix.os }}.tar.xz nimdir
     - name: List
       shell: bash
