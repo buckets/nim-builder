@@ -53,4 +53,4 @@ jobs:
       run: |
         ls -alR artifacts
         TAG="v1.6.10-$(date "+%Y%m%d-%H%M%S")"
-        gh release create "$TAG" --draft artifacts/**/*.tar.xz
+        gh release create "$TAG" --title "$TAG" --draft artifacts/**/*.tar.xz
