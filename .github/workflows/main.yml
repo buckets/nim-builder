@@ -143,6 +143,7 @@ jobs:
       - name: Checkout nightlies
         uses: actions/checkout@v3
         with:
+          repository: nim-lang/nightlies
           path: nightlies
 
       - name: Restore Nim from cache
@@ -325,6 +326,7 @@ jobs:
       - name: Checkout build scripts
         uses: actions/checkout@v3
         with:
+          repository: nim-lang/nightlies
           path: nightlies
 
       - name: Cache build outputs
@@ -447,6 +449,7 @@ jobs:
         if: steps.deploy-cache.outputs.cache-hit != 'true'
         uses: actions/checkout@v3
         with:
+          repository: nim-lang/nightlies
           path: nightlies
 
       - name: Download generated source package
