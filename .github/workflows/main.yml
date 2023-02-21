@@ -25,6 +25,7 @@ jobs:
       - name: Checkout nightlies
         uses: actions/checkout@v3
         with:
+          repository: nim-lang/nightlies
           path: nightlies
 
       - name: Generate version matrix
