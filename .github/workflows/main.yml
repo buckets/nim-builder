@@ -98,7 +98,7 @@ jobs:
                   done
                 } | jq -s '{ environment: (reduce .[] as $item (null; . + $item)) }'
 
-                tag=$(date "+%Y%m%d")-$branch-$commit
+                tag=$(date "+%Y%m%d-%H%M%S")-$branch-$commit
                 # Don't add revision to tags for now.
                 # if [[ $buildRevision -gt 0 ]]; then
                 #   tag=$tag-$buildRevision
