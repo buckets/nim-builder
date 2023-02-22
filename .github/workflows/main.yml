@@ -1,56 +1,503 @@
+# Copied from https://github.com/nim-lang/nightlies/blob/2389a5bb9d52ea138ab831ee6bed9f2ea9cc1008/.github/workflows/nightlies.yml
+name: Custom build
 on:
-  pull_request:
   push:
+  pull_request:
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        version:
-          - 'git:v1.6.10-pluspatches https://github.com/iffy/Nim.git'
-        os:
-          - ubuntu-latest
-          - macOS-latest
-          - windows-latest
-    steps:
-    - uses: iffy/install-nim@v4
-      with:
-        version: ${{ matrix.version }}
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    - name: Inspect
-      shell: bash
-      run: |
-        ls -al
-        which nim
-        which nimble
-    - name: Package
-      shell: bash
-      run: |
-        tar czvf nim-1.6.10-pluspatches-${{ matrix.os }}.tar.xz nimdir/bin nimdir/compiler nimdir/compiler.nimble nimdir/config nimdir/copying.txt nimdir/dist nimdir/doc nimdir/icons nimdir/koch nimdir/koch.nim nimdir/koch.nim.cfg nimdir/lib nimdir/nimpretty nimdir/nimsuggest nimdir/testament nimdir/tests nimdir/tools
-    - name: List
-      shell: bash
-      run: |
-        tar tf nim-1.6.10-pluspatches-${{ matrix.os }}.tar.xz
-    - uses: actions/upload-artifact@v3
-      with:
-        name: nim-1.6.10-pluspatches-${{ matrix.os }}.tar.xz
-        path: nim-1.6.10-pluspatches-${{ matrix.os }}.tar.xz
-  publish:
+  setup:
+    name: 'build settings'
     runs-on: ubuntu-latest
-    needs: build
+    outputs:
+      settings: ${{ steps.settings.outputs.settings }}
+      deploy: ${{ steps.settings.outputs.deploy }}
+
+    env:
+      # Bump this value when a rebuild of nightlies (of the
+      # same compiler commits) has to be done.
+      nightlies_revision: 5
+
     steps:
-    - uses: actions/checkout@v1
-    - name: Download artifacts
-      uses: actions/download-artifact@v3
-      with:
-        path: artifacts
-    - name: Draft release
-      shell: bash
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        ls -alR artifacts
-        TAG="v1.6.10-$(date "+%Y%m%d-%H%M%S")"
-        gh release create "$TAG" --title "$TAG" --draft artifacts/**/*.tar.xz
+      - name: Checkout nightlies
+        uses: actions/checkout@v3
+        with:
+          path: nightlies
+
+      - name: Generate version matrix
+        shell: bash
+        run: |
+          # Tracked branches
+          branches=( 'v1.6.10-pluspatches' )
+
+          getHash() {
+            git ls-remote "https://github.com/$1" "$2" | cut -f 1
+          }
+
+          {
+            for branch in "${branches[@]}"; do
+              jq --null-input \
+                 --arg branch "$branch" \
+                 --arg commit "$(getHash iffy/Nim "$branch")" \
+                 '{ branch: $branch, commit: $commit }'
+            done
+          } | jq -s '.' | tee versions.json
+
+      - name: Restore build settings
+        uses: actions/cache@v3
+        with:
+          path: settings
+          key: build-settings-${{ hashFiles('versions.json') }}-${{ env.nightlies_revision }}
+          restore-keys: build-settings-
+
+      - name: Generate build settings
+        id: settings
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          deploy=true
+
+          declare -A refs
+
+          while IFS='=' read -r branch commit; do
+            refs[$branch]=$commit
+          done <<< "$(jq -r '.[] | .branch + "=" + .commit' versions.json)"
+
+          mkdir -p settings
+          # Delete older branch settings (if they were restored)
+          find settings -mindepth 1 -maxdepth 1 $(printf "! -name %q.json " "${!refs[@]}")
+
+          declare -A environment=(
+            [SOURCE_CODE_EPOCH]=$(date -u +%s)
+          )
+
+          for branch in "${!refs[@]}"; do
+            savedCommit=
+            savedNightliesRev=
+            savedBuildRevision=
+            commit=${refs[$branch]}
+            buildRevision=0
+            if [[ -e "settings/$branch.json" ]]; then
+              savedSettings=$(< "settings/$branch.json")
+              savedCommit=$(jq -r '.commit' <<< "$savedSettings")
+              savedNightliesRev=$(jq '.nightlies_revision // 0' <<< "$savedSettings")
+              savedBuildRevision=$(jq '.build_revision // -1' <<< "$savedSettings")
+              if [[ $savedNightliesRev -ne $nightlies_revision ]]; then
+                buildRevision=$(($savedBuildRevision + 1))
+              fi
+            fi
+            if [[ $savedCommit != "$commit" || $savedNightliesRev -ne $nightlies_revision ]]; then
+              echo "::group::Generating build settings for branch $branch"
+              {
+                {
+                  for var in "${!environment[@]}"; do
+                    jq --null-input \
+                       --arg variable "$var" \
+                       --arg value "${environment[$var]}" \
+                       '{ ($variable): $value }'
+                  done
+                } | jq -s '{ environment: (reduce .[] as $item (null; . + $item)) }'
+
+                tag=$(date -u --date="@${environment[SOURCE_CODE_EPOCH]}" +%F)-$branch-$commit
+                # Don't add revision to tags for now.
+                # if [[ $buildRevision -gt 0 ]]; then
+                #   tag=$tag-$buildRevision
+                # fi
+
+                jq --null-input --arg tag "$tag" '{ release: $tag }'
+                jq --null-input --argjson nightlies_revision "$nightlies_revision" '{ nightlies_revision: $nightlies_revision }'
+                jq --null-input --argjson build_revision "$buildRevision" '{ build_revision: $build_revision }'
+                if [[ "$tag" == version-1-0 ]]; then
+                  jq --null-input --argjson csources "nim-lang/csources" '{ csources: $csources }'
+                fi
+                if [[ "$tag" == version-2-0 ]]; then
+                  jq --null-input --argjson csources "nim-lang/csources_v2" '{ csources: $csources }'
+                fi
+                if [[ "$tag" == devel ]]; then
+                  jq --null-input --argjson csources "nim-lang/csources_v2" '{ csources: $csources }'
+                fi
+
+              } | jq -s --arg commit "$commit" 'reduce .[] as $item ({ commit: $commit }; . + $item)' > "settings/$branch.json"
+            else
+              echo "::group::Stored settings for branch $branch @ $commit found."
+            fi
+            jq --arg branch "$branch" '.[] | select(.branch == $branch)' versions.json | jq -s 'add' - "settings/$branch.json" | tee -a settings.json
+            echo "::endgroup::"
+          done
+
+          echo "settings=$(jq -sc '.' settings.json)" >> $GITHUB_OUTPUT
+          echo "deploy=$deploy" >> $GITHUB_OUTPUT
+
+  sourceArchive:
+    needs: setup
+
+    strategy:
+      fail-fast: false
+      matrix:
+        setting: ${{ fromJson(needs.setup.outputs.settings) }}
+    name: 'source (${{ matrix.setting.branch }}, ${{ matrix.setting.commit }})'
+    runs-on: ubuntu-latest
+    env: ${{ matrix.setting.environment }}
+    steps:
+      - name: Checkout nightlies
+        uses: actions/checkout@v3
+        with:
+          path: nightlies
+
+      - name: Restore Nim from cache
+        id: nim-cache
+        uses: actions/cache@v3
+        with:
+          path: nim/output/nim-*.tar.xz
+          key: 'source-${{ matrix.setting.commit }}-${{ matrix.setting.build_revision }}'
+
+      - name: Checkout Nim
+        if: steps.nim-cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v3
+        with:
+          repository: iffy/Nim
+          ref: ${{ matrix.setting.commit }}
+          path: nim
+
+      - name: Get csources version
+        if: steps.nim-cache.outputs.cache-hit != 'true'
+        id: csources-version
+        shell: bash
+        run: |
+          csources_repo=${{ matrix.setting.csources }}
+          # if one is not set, use csources_v1
+          : "${csources_repo:=nim-lang/csources_v1}"
+          csources_commit=$(git ls-remote "https://github.com/$csources_repo" master | cut -f 1)
+
+          if [[ -f nim/config/build_config.txt ]]; then
+            . nim/config/build_config.txt
+
+            csources_repo=${nim_csourcesUrl#https://github.com/}
+            csources_repo=${csources_repo%.git}
+            csources_commit=$nim_csourcesHash
+          fi
+
+          echo "repo=$csources_repo" >> $GITHUB_OUTPUT
+          echo "commit=$csources_commit" >> $GITHUB_OUTPUT
+
+      - name: Restore csources from cache
+        if: steps.nim-cache.outputs.cache-hit != 'true'
+        id: csources-cache
+        uses: actions/cache@v3
+        with:
+          path: csources/bin
+          key: >
+            csources-${{ runner.os }}-${{ steps.csources-version.outputs.repo }}-${{ steps.csources-version.outputs.commit }}
+
+      - name: Checkout csources
+        if: >
+          steps.nim-cache.outputs.cache-hit != 'true' &&
+          steps.csources-cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ steps.csources-version.outputs.repo }}
+          ref: ${{ steps.csources-version.outputs.commit }}
+          path: csources
+
+      - name: Setup environment
+        shell: bash
+        run: echo '${{ github.workspace }}/nim/bin' >> "$GITHUB_PATH"
+
+      - name: Build 1-stage csources compiler
+        if: steps.nim-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          if [[ ! -e csources/bin/nim ]]; then
+            make -C csources -j $(nproc) CC=gcc
+          else
+            echo 'Using prebuilt csources'
+          fi
+          cp csources/bin/nim nim/bin
+
+      - name: Build compiler
+        if: steps.nim-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          cd nim
+          nim c koch
+          ./koch boot -d:release
+
+      - name: Generate csources
+        if: steps.nim-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          cd nim
+          ./koch csources -d:danger '-d:gitHash:${{ matrix.setting.commit }}'
+
+      - name: Bundle external sources
+        if: steps.nim-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          cd nim
+
+          version=$(nim secret --hints:off <<< 'echo NimVersion; quit 0')
+          major=${version%%.*}
+          minor=${version#*.}
+          minor=${minor%.*}
+          patch=${version##*.}
+
+          ./koch nimble
+          # Only Nim >= 1.4.0 bundles fusion.
+          if [[ $major -ge 1 && $minor -ge 4 ]]; then
+            ./koch fusion
+          fi
+
+      - name: Build source archive
+        if: steps.nim-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          cd nim
+          ./koch xz
+
+          mkdir -p output
+          source=$(basename build/nim-*.tar.xz)
+          version=${source%.tar.xz}
+          version=${version#nim-}
+          cp build/$source output/nim-$version.tar.xz
+
+      # - name: Publish release
+      #   if: needs.setup.outputs.deploy == 'true'
+      #   shell: bash
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      #   run: |
+      #     if ! hub -C nightlies release show '${{ matrix.setting.release }}' >/dev/null 2>&1; then
+      #       cat << EOF | hub -C nightlies release create -a nim/output/* -F - '${{ matrix.setting.release }}' >/dev/null
+      #     Nightly build on $(date -u --date="@$SOURCE_CODE_EPOCH" "+%F") for branch ${{ matrix.setting.branch }}
+
+      #     Commit: https://github.com/iffy/Nim/commit/${{ matrix.setting.commit }}
+
+      #     Generated release binaries will be uploaded as they're made available.
+      #     EOF
+      #     else
+      #       echo "Release '${{ matrix.setting.release }}' has already been created, skipping."
+      #     fi
+
+      - name: Upload source archive to artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: 'nim-${{ matrix.setting.commit }}'
+          path: nim/output/*
+
+  build:
+    needs: [ setup, sourceArchive ]
+
+    strategy:
+      fail-fast: false
+      matrix:
+        setting: ${{ fromJson(needs.setup.outputs.settings) }}
+        target:
+          - os: linux
+            triple: x86_64-linux-musl
+          - os: linux
+            triple: i686-linux-musl
+          - os: linux
+            triple: aarch64-linux-musl
+          - os: linux
+            triple: armv7l-linux-musleabihf
+          - os: macosx
+            triple: x86_64-apple-darwin14
+          - os: windows
+            triple: x86_64-w64-mingw32
+          - os: windows
+            triple: i686-w64-mingw32
+        include:
+          - target:
+              os: linux
+            builder: ubuntu-20.04
+          - target:
+              os: macosx
+            builder: macos-11
+          - target:
+              os: windows
+            builder: windows-2019
+
+    env: ${{ matrix.setting.environment }}
+    name: '${{ matrix.target.triple }} (${{ matrix.setting.branch }}, ${{ matrix.setting.commit }})'
+    runs-on: ${{ matrix.builder }}
+    steps:
+      - name: Checkout build scripts
+        uses: actions/checkout@v3
+        with:
+          path: nightlies
+
+      - name: Cache build outputs
+        id: built
+        uses: actions/cache@v3
+        with:
+          path: output
+          key: >
+            output-${{ hashFiles('nightlies/lib.sh') }}-${{ hashFiles('nightlies/build-release.sh') }}-${{ matrix.target.triple }}-${{ matrix.setting.commit }}-${{ matrix.setting.build_revision }}
+
+      - name: Cache dependencies
+        if: steps.built.outputs.cache-hit != 'true'
+        uses: actions/cache@v3
+        with:
+          path: external
+          key: >
+            deps-${{ hashFiles('nightlies/lib.sh') }}-${{ hashFiles('nightlies/deps.sh') }}-${{ hashFiles('nightlies/buildreq.txt') }}-${{ runner.os }}-${{ matrix.target.triple }}-${{ matrix.setting.build_revision }}
+
+      - name: Install dependencies
+        if: steps.built.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: nightlies/deps.sh -t '${{ matrix.target.triple }}'
+
+      - name: Download generated source package
+        if: steps.built.outputs.cache-hit != 'true'
+        uses: actions/download-artifact@v3
+        with:
+          name: 'nim-${{ matrix.setting.commit }}'
+          path: source
+
+      - name: Extract source package
+        if: steps.built.outputs.cache-hit != 'true'
+        id: source
+        shell: bash
+        run: |
+          source=( source/nim-*.tar.xz )
+          version=${source[0]##*nim-}
+          version=${version%%.tar.xz}
+          case '${{ runner.os }}' in
+            'Windows')
+              7z x -so "${source[0]}" | 7z x -si -ttar -aoa
+              ;;
+            *)
+              tar xJf "${source[0]}"
+              ;;
+          esac
+
+          echo "version=$version" >> $GITHUB_OUTPUT
+
+      - name: Setup environment
+        if: steps.built.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          echo "-d:gitHash:\"${{ matrix.setting.commit }}\"" >> external/nim.cfg
+
+      - name: Build release binaries
+        if: steps.built.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          nightlies/build-release.sh 'nim-${{ steps.source.outputs.version }}'
+
+      - name: Prepare binaries for uploads
+        id: release
+        shell: bash
+        run: |
+          source nightlies/lib.sh
+
+          artifact=$(< output/nim.txt)
+          echo "artifact=$artifact" >> $GITHUB_OUTPUT
+          # Github Actions work based on native Windows path, so we're doing
+          # some quick conversions here.
+          echo "artifact_nativepath=$(nativepath "$artifact")" >> $GITHUB_OUTPUT
+
+      - name: Upload release binaries
+        if: needs.setup.outputs.deploy == 'true'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd nightlies
+          gh release create --draft --title '${{ matrix.setting.release }}' '${{ matrix.setting.release }}' || echo "Already created"
+          gh release upload '${{ matrix.setting.release }}' '${{ steps.release.outputs.artifact }}'
+
+      - name: Upload binaries to artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: 'binaries-${{ matrix.setting.branch }}-${{ matrix.setting.commit }}'
+          path: '${{ steps.release.outputs.artifact_nativepath }}'
+
+  # latestTag:
+  #   needs: [ setup, build ]
+
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       setting: ${{ fromJson(needs.setup.outputs.settings) }}
+
+  #   if: needs.setup.outputs.deploy == 'true'
+  #   name: 'Update latest tags for ${{ matrix.setting.release }}'
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Store build settings
+  #       shell: bash
+  #       run: |
+  #         cat <<< '${{ toJson(matrix.setting) }}' > setting.json
+
+  #     - name: Check whether deployment was done for this setting set
+  #       id: deploy-cache
+  #       uses: actions/cache@v3
+  #       with:
+  #         path: setting.json
+  #         key: deploy-${{ hashFiles('setting.json') }}-${{ env.nightlies_revision }}
+
+  #     - name: Checkout nightlies
+  #       if: steps.deploy-cache.outputs.cache-hit != 'true'
+  #       uses: actions/checkout@v3
+  #       with:
+  #         path: nightlies
+
+  #     - name: Download generated source package
+  #       if: steps.deploy-cache.outputs.cache-hit != 'true'
+  #       uses: actions/download-artifact@v3
+  #       with:
+  #         name: 'nim-${{ matrix.setting.commit }}'
+  #         path: source
+
+  #     - name: Download built binaries from artifacts
+  #       if: steps.deploy-cache.outputs.cache-hit != 'true'
+  #       uses: actions/download-artifact@v3
+  #       with:
+  #         name: 'binaries-${{ matrix.setting.branch }}-${{ matrix.setting.commit }}'
+  #         path: binaries
+
+  #     - name: 'Push latest-${{ matrix.setting.branch }} tag'
+  #       if: steps.deploy-cache.outputs.cache-hit != 'true'
+  #       shell: bash
+  #       env:
+  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #       run: |
+  #         tag='latest-${{ matrix.setting.branch }}'
+  #         mkdir -p assets
+  #         source=("$GITHUB_WORKSPACE"/source/*)
+  #         # Rename the source archive as source.tar.xz
+  #         mv -v "${source[0]}" "assets/source.tar.xz"
+
+  #         for artifact in binaries/*; do
+  #           # Trim version from artifact name
+  #           shortName=${artifact#*nim-*-}
+  #           mv -v "$artifact" "assets/$shortName"
+  #         done
+
+  #         cat << EOF > release-notes.md
+
+  #         This release is an alias for the latest successful nightly build \
+  #         for branch \`${{ matrix.setting.branch }}\`: https://github.com/${{ github.repository }}/releases/tag/${{ matrix.setting.release }}
+
+  #         Each \`latest-\` alias is guaranteed to contain binaries for all \
+  #         supported architectures.
+  #         EOF
+
+  #         cd nightlies
+
+  #         # By deleting and recreating the tag, Github recognize it as the true
+  #         # "latest" tags.
+  #         echo "Deleting release $tag (errors are ignored)"
+  #         gh release delete -y "$tag" || :
+  #         git push --delete origin "$tag" || :
+
+  #         echo "Publishing $tag"
+  #         gh release create \
+  #           --draft \
+  #           -t 'Latest successful build for branch ${{ matrix.setting.branch }}' \
+  #           -F "$GITHUB_WORKSPACE/release-notes.md" \
+  #           "$tag" \
+  #           "$GITHUB_WORKSPACE/assets"/*

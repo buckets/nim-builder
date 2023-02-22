@@ -1,0 +1,71 @@
+version: '{build}'
+
+cache:
+#- x86_64-4.9.2-release-win32-seh-rt_v4-rev4.7z
+- sqlite-dll-win64-x64-3160200.zip
+- windeps.7z
+- mingw.7z
+# - i686-4.9.2-release-win32-dwarf-rt_v4-rev4.7z
+
+matrix:
+  fast_finish: true
+
+environment:
+  matrix:
+    - MINGW_DIR: mingw64
+      MINGW_URL: https://nim-lang.org/download/mingw64-6.3.0.7z
+      SQLITE_URL: http://www.sqlite.org/2017/sqlite-dll-win64-x64-3160200.zip
+      SQLITE_ARCHIVE: sqlite-dll-win64-x64-3160200.zip
+      platform: x64
+    - MINGW_DIR: mingw32
+      MINGW_URL: https://nim-lang.org/download/mingw32-6.3.0.7z
+      SQLITE_URL: http://www.sqlite.org/2017/sqlite-dll-win32-x86-3160200.zip
+      SQLITE_ARCHIVE: sqlite-dll-win32-x86-3160200.zip
+      platform: x86
+
+install:
+  - ps: Install-Product node 8 # node 8 or later is required to test js async stuff
+  - MKDIR %CD%\DIST
+  - MKDIR %CD%\DIST\PCRE
+
+  - nuget install pcre -Verbosity quiet -Version 8.33.0.1 -OutputDirectory %CD%\DIST\PCRE
+  - if not exist "%SQLITE_ARCHIVE%" appveyor DownloadFile "%SQLITE_URL%" -FileName "%SQLITE_ARCHIVE%"
+  - 7z x -y "%SQLITE_ARCHIVE%" -o"%CD%\DIST"> nul
+
+  - if not exist mingw.7z appveyor DownloadFile "%MINGW_URL%" -FileName "mingw.7z"
+
+  - 7z x -y "mingw.7z" -o"%CD%\DIST"> nul
+
+  - SET PATH=%CD%\DIST\%MINGW_DIR%\bin;%CD%\bin;%CD%\nim\bin;%PATH%
+  - git clone --depth 1 https://github.com/nim-lang/csources
+  - cd csources
+  - if "%PLATFORM%" == "x64" ( build64.bat ) else ( build.bat )
+  - cd ..
+  - git clone --depth 1 https://github.com/nim-lang/nim.git
+  - copy /y csources\bin\nim.exe nim\bin\nim.exe
+
+  - if not exist "windeps.7z" appveyor DownloadFile "https://nim-lang.org/download/windeps.7z" -FileName "windeps.7z"
+  - 7z x -y "windeps.7z" -o"nim\bin"> nul
+
+
+build_script:
+  - cd nim
+  - mkdir web\upload
+  - mkdir web\upload\download
+  - bin\nim c koch
+  - koch boot -d:release
+  - nim c tools\winrelease
+  - tools\winrelease
+  - cd ..
+  - ps: get-item .\nim\web\upload\download\nim-*.zip | % { Push-AppveyorArtifact $_.FullName }
+
+deploy:
+  release: nim-appveyor # v$(appveyor_build_version)
+  description: 'Nim built by Appveyor'
+  provider: GitHub
+  auth_token: $(GITHUB_OAUTH_TOKEN)
+  artifact: 'nim\web\upload\download\nim-*.zip'
+  draft: false
+  prerelease: false
+  on:
+    appveyor_repo_tag: true        # deploy on tag push only
