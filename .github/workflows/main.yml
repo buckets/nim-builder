@@ -260,23 +260,23 @@ jobs:
           version=${version#nim-}
           cp build/$source output/nim-$version.tar.xz
 
-      - name: Publish release
-        if: needs.setup.outputs.deploy == 'true'
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if ! hub -C nightlies release show '${{ matrix.setting.release }}' >/dev/null 2>&1; then
-            cat << EOF | hub -C nightlies release create -a nim/output/* -F - '${{ matrix.setting.release }}' >/dev/null
-          Nightly build on $(date -u --date="@$SOURCE_CODE_EPOCH" "+%F") for branch ${{ matrix.setting.branch }}
+      # - name: Publish release
+      #   if: needs.setup.outputs.deploy == 'true'
+      #   shell: bash
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      #   run: |
+      #     if ! hub -C nightlies release show '${{ matrix.setting.release }}' >/dev/null 2>&1; then
+      #       cat << EOF | hub -C nightlies release create -a nim/output/* -F - '${{ matrix.setting.release }}' >/dev/null
+      #     Nightly build on $(date -u --date="@$SOURCE_CODE_EPOCH" "+%F") for branch ${{ matrix.setting.branch }}
 
-          Commit: https://github.com/iffy/Nim/commit/${{ matrix.setting.commit }}
+      #     Commit: https://github.com/iffy/Nim/commit/${{ matrix.setting.commit }}
 
-          Generated release binaries will be uploaded as they're made available.
-          EOF
-          else
-            echo "Release '${{ matrix.setting.release }}' has already been created, skipping."
-          fi
+      #     Generated release binaries will be uploaded as they're made available.
+      #     EOF
+      #     else
+      #       echo "Release '${{ matrix.setting.release }}' has already been created, skipping."
+      #     fi
 
       - name: Upload source archive to artifacts
         uses: actions/upload-artifact@v3
@@ -406,11 +406,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd nightlies
-          if ! hub release show -f '%as' '${{ matrix.setting.release }}' | grep "$(basename '${{ steps.release.outputs.artifact }}')" >/dev/null 2>&1; then
-            hub release edit -m '' -a '${{ steps.release.outputs.artifact }}' '${{ matrix.setting.release }}'
-          else
-            echo "Binary already released for tag '${{ matrix.setting.release }}', not overwritting."
-          fi
+          gh release create --draft --title '${{ matrix.setting.release }}' '${{ matrix.setting.release }}' || echo "Already created"
+          gh release upload '${{ matrix.setting.release }}' '${{ steps.release.outputs.artifact }}'
 
       - name: Upload binaries to artifacts
         uses: actions/upload-artifact@v3
@@ -418,89 +415,89 @@ jobs:
           name: 'binaries-${{ matrix.setting.branch }}-${{ matrix.setting.commit }}'
           path: '${{ steps.release.outputs.artifact_nativepath }}'
 
-  latestTag:
-    needs: [ setup, build ]
+  # latestTag:
+  #   needs: [ setup, build ]
 
-    strategy:
-      fail-fast: false
-      matrix:
-        setting: ${{ fromJson(needs.setup.outputs.settings) }}
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       setting: ${{ fromJson(needs.setup.outputs.settings) }}
 
-    if: needs.setup.outputs.deploy == 'true'
-    name: 'Update latest tags for ${{ matrix.setting.release }}'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Store build settings
-        shell: bash
-        run: |
-          cat <<< '${{ toJson(matrix.setting) }}' > setting.json
+  #   if: needs.setup.outputs.deploy == 'true'
+  #   name: 'Update latest tags for ${{ matrix.setting.release }}'
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Store build settings
+  #       shell: bash
+  #       run: |
+  #         cat <<< '${{ toJson(matrix.setting) }}' > setting.json
 
-      - name: Check whether deployment was done for this setting set
-        id: deploy-cache
-        uses: actions/cache@v3
-        with:
-          path: setting.json
-          key: deploy-${{ hashFiles('setting.json') }}-${{ env.nightlies_revision }}
+  #     - name: Check whether deployment was done for this setting set
+  #       id: deploy-cache
+  #       uses: actions/cache@v3
+  #       with:
+  #         path: setting.json
+  #         key: deploy-${{ hashFiles('setting.json') }}-${{ env.nightlies_revision }}
 
-      - name: Checkout nightlies
-        if: steps.deploy-cache.outputs.cache-hit != 'true'
-        uses: actions/checkout@v3
-        with:
-          path: nightlies
+  #     - name: Checkout nightlies
+  #       if: steps.deploy-cache.outputs.cache-hit != 'true'
+  #       uses: actions/checkout@v3
+  #       with:
+  #         path: nightlies
 
-      - name: Download generated source package
-        if: steps.deploy-cache.outputs.cache-hit != 'true'
-        uses: actions/download-artifact@v3
-        with:
-          name: 'nim-${{ matrix.setting.commit }}'
-          path: source
+  #     - name: Download generated source package
+  #       if: steps.deploy-cache.outputs.cache-hit != 'true'
+  #       uses: actions/download-artifact@v3
+  #       with:
+  #         name: 'nim-${{ matrix.setting.commit }}'
+  #         path: source
 
-      - name: Download built binaries from artifacts
-        if: steps.deploy-cache.outputs.cache-hit != 'true'
-        uses: actions/download-artifact@v3
-        with:
-          name: 'binaries-${{ matrix.setting.branch }}-${{ matrix.setting.commit }}'
-          path: binaries
+  #     - name: Download built binaries from artifacts
+  #       if: steps.deploy-cache.outputs.cache-hit != 'true'
+  #       uses: actions/download-artifact@v3
+  #       with:
+  #         name: 'binaries-${{ matrix.setting.branch }}-${{ matrix.setting.commit }}'
+  #         path: binaries
 
-      - name: 'Push latest-${{ matrix.setting.branch }} tag'
-        if: steps.deploy-cache.outputs.cache-hit != 'true'
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tag='latest-${{ matrix.setting.branch }}'
-          mkdir -p assets
-          source=("$GITHUB_WORKSPACE"/source/*)
-          # Rename the source archive as source.tar.xz
-          mv -v "${source[0]}" "assets/source.tar.xz"
+  #     - name: 'Push latest-${{ matrix.setting.branch }} tag'
+  #       if: steps.deploy-cache.outputs.cache-hit != 'true'
+  #       shell: bash
+  #       env:
+  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #       run: |
+  #         tag='latest-${{ matrix.setting.branch }}'
+  #         mkdir -p assets
+  #         source=("$GITHUB_WORKSPACE"/source/*)
+  #         # Rename the source archive as source.tar.xz
+  #         mv -v "${source[0]}" "assets/source.tar.xz"
 
-          for artifact in binaries/*; do
-            # Trim version from artifact name
-            shortName=${artifact#*nim-*-}
-            mv -v "$artifact" "assets/$shortName"
-          done
+  #         for artifact in binaries/*; do
+  #           # Trim version from artifact name
+  #           shortName=${artifact#*nim-*-}
+  #           mv -v "$artifact" "assets/$shortName"
+  #         done
 
-          cat << EOF > release-notes.md
+  #         cat << EOF > release-notes.md
 
-          This release is an alias for the latest successful nightly build \
-          for branch \`${{ matrix.setting.branch }}\`: https://github.com/${{ github.repository }}/releases/tag/${{ matrix.setting.release }}
+  #         This release is an alias for the latest successful nightly build \
+  #         for branch \`${{ matrix.setting.branch }}\`: https://github.com/${{ github.repository }}/releases/tag/${{ matrix.setting.release }}
 
-          Each \`latest-\` alias is guaranteed to contain binaries for all \
-          supported architectures.
-          EOF
+  #         Each \`latest-\` alias is guaranteed to contain binaries for all \
+  #         supported architectures.
+  #         EOF
 
-          cd nightlies
+  #         cd nightlies
 
-          # By deleting and recreating the tag, Github recognize it as the true
-          # "latest" tags.
-          echo "Deleting release $tag (errors are ignored)"
-          gh release delete -y "$tag" || :
-          git push --delete origin "$tag" || :
+  #         # By deleting and recreating the tag, Github recognize it as the true
+  #         # "latest" tags.
+  #         echo "Deleting release $tag (errors are ignored)"
+  #         gh release delete -y "$tag" || :
+  #         git push --delete origin "$tag" || :
 
-          echo "Publishing $tag"
-          gh release create \
-            --draft \
-            -t 'Latest successful build for branch ${{ matrix.setting.branch }}' \
-            -F "$GITHUB_WORKSPACE/release-notes.md" \
-            "$tag" \
-            "$GITHUB_WORKSPACE/assets"/*
+  #         echo "Publishing $tag"
+  #         gh release create \
+  #           --draft \
+  #           -t 'Latest successful build for branch ${{ matrix.setting.branch }}' \
+  #           -F "$GITHUB_WORKSPACE/release-notes.md" \
+  #           "$tag" \
+  #           "$GITHUB_WORKSPACE/assets"/*
