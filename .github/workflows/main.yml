@@ -302,6 +302,8 @@ jobs:
             triple: armv7l-linux-musleabihf
           - os: macosx
             triple: x86_64-apple-darwin14
+          - os: macosx
+            triple: arm64-apple-darwin20.1.0
           - os: windows
             triple: x86_64-w64-mingw32
           - os: windows
