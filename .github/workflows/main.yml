@@ -409,7 +409,7 @@ jobs:
         run: |
           cd nightlies
           gh release create --draft --title '${{ matrix.setting.release }}' '${{ matrix.setting.release }}' || echo "Already created"
-          gh release upload '${{ matrix.setting.release }}' '${{ steps.release.outputs.artifact }}'
+          gh release upload --clobber '${{ matrix.setting.release }}' '${{ steps.release.outputs.artifact }}'
 
       - name: Upload binaries to artifacts
         uses: actions/upload-artifact@v3
